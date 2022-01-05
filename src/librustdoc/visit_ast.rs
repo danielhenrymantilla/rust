@@ -27,8 +27,8 @@ crate struct Module<'hir> {
     crate where_inner: Span,
     crate mods: Vec<Module<'hir>>,
     crate id: hir::HirId,
-    // (item, renamed)
-    crate items: Vec<(&'hir hir::Item<'hir>, Option<Symbol>)>,
+    // (item, renamed, strip_doc_hidden)
+    crate items: Vec<(&'hir hir::Item<'hir>, Option<Symbol>, StripOutermostDocHidden)>,
     crate foreigns: Vec<(&'hir hir::ForeignItem<'hir>, Option<Symbol>)>,
 }
 
@@ -60,6 +60,15 @@ crate fn inherits_doc_hidden(tcx: TyCtxt<'_>, mut node: hir::HirId) -> bool {
         }
     }
     false
+}
+
+/// Checked by `visit_item`, to strip any outstanding `#[doc(hidden)]`s on
+/// the (outermost) re-exported item, should the re-export itself have featured
+/// a "please inline" directive (`#[doc(inline)]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+crate enum StripOutermostDocHidden {
+    YesBecausePleaseInline,
+    No,
 }
 
 // Also, is there some reason that this doesn't use the 'visit'
@@ -118,7 +127,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                     if self.cx.tcx.has_attr(def_id, sym::macro_export) {
                         if inserted.insert(def_id) {
                             let item = self.cx.tcx.hir().expect_item(local_def_id);
-                            top_level_module.items.push((item, None));
+                            top_level_module.items.push((item, None, StripOutermostDocHidden::No));
                         }
                     }
                 }
@@ -164,7 +173,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
         self.inside_public_path &= self.cx.tcx.visibility(def_id).is_public();
         for &i in m.item_ids {
             let item = self.cx.tcx.hir().item(i);
-            self.visit_item(item, None, &mut om);
+            self.visit_item(item, None, &mut om, StripOutermostDocHidden::No);
         }
         self.inside_public_path = orig_inside_public_path;
         om
@@ -245,14 +254,20 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                 let prev = mem::replace(&mut self.inlining, true);
                 for &i in m.item_ids {
                     let i = self.cx.tcx.hir().item(i);
-                    self.visit_item(i, None, om);
+                    // no not override doc hiddens if through a blob re-export.
+                    self.visit_item(i, None, om, StripOutermostDocHidden::No);
                 }
                 self.inlining = prev;
                 true
             }
             Node::Item(it) if !glob => {
+                let strip_outermost_doc_hidden = if please_inline {
+                    StripOutermostDocHidden::YesBecausePleaseInline
+                } else {
+                    StripOutermostDocHidden::No
+                };
                 let prev = mem::replace(&mut self.inlining, true);
-                self.visit_item(it, renamed, om);
+                self.visit_item(it, renamed, om, strip_outermost_doc_hidden);
                 self.inlining = prev;
                 true
             }
@@ -273,6 +288,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
         item: &'tcx hir::Item<'_>,
         renamed: Option<Symbol>,
         om: &mut Module<'tcx>,
+        strip_outermost_doc_hidden: StripOutermostDocHidden,
     ) {
         debug!("visiting item {:?}", item);
         let name = renamed.unwrap_or(item.ident.name);
@@ -328,7 +344,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                     }
                 }
 
-                om.items.push((item, renamed))
+                om.items.push((item, renamed, strip_outermost_doc_hidden))
             }
             hir::ItemKind::Macro(ref macro_def) => {
                 // `#[macro_export] macro_rules!` items are handled seperately in `visit()`,
@@ -347,10 +363,11 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                 let nonexported = !self.cx.tcx.has_attr(def_id, sym::macro_export);
 
                 if is_macro_2_0 || nonexported || self.inlining {
-                    om.items.push((item, renamed));
+                    om.items.push((item, renamed, strip_outermost_doc_hidden));
                 }
             }
             hir::ItemKind::Mod(ref m) => {
+                // FIXME: apply `strip_outermost_doc_hidden` to re-exported modules as well.
                 om.mods.push(self.visit_mod_contents(item.hir_id(), m, name));
             }
             hir::ItemKind::Fn(..)
@@ -362,19 +379,19 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
             | hir::ItemKind::OpaqueTy(..)
             | hir::ItemKind::Static(..)
             | hir::ItemKind::Trait(..)
-            | hir::ItemKind::TraitAlias(..) => om.items.push((item, renamed)),
+            | hir::ItemKind::TraitAlias(..) => om.items.push((item, renamed, strip_outermost_doc_hidden)),
             hir::ItemKind::Const(..) => {
                 // Underscore constants do not correspond to a nameable item and
                 // so are never useful in documentation.
                 if name != kw::Underscore {
-                    om.items.push((item, renamed));
+                    om.items.push((item, renamed, strip_outermost_doc_hidden));
                 }
             }
             hir::ItemKind::Impl(ref impl_) => {
                 // Don't duplicate impls when inlining or if it's implementing a trait, we'll pick
                 // them up regardless of where they're located.
                 if !self.inlining && impl_.of_trait.is_none() {
-                    om.items.push((item, None));
+                    om.items.push((item, None, strip_outermost_doc_hidden));
                 }
             }
         }

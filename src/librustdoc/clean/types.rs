@@ -445,8 +445,22 @@ impl Item {
         kind: ItemKind,
         cx: &mut DocContext<'_>,
     ) -> Item {
-        let ast_attrs = cx.tcx.get_attrs(def_id);
+        Self::from_def_id_and_ast_attrs_and_parts(
+            def_id,
+            name,
+            kind,
+            cx.tcx.get_attrs(def_id),
+            cx,
+        )
+    }
 
+    crate fn from_def_id_and_ast_attrs_and_parts(
+        def_id: DefId,
+        name: Option<Symbol>,
+        kind: ItemKind,
+        ast_attrs: ty::Attributes<'_>,
+        cx: &mut DocContext<'_>,
+    ) -> Item {
         Self::from_def_id_and_attrs_and_parts(
             def_id,
             name,

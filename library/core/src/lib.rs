@@ -282,6 +282,30 @@ pub mod f64;
 #[macro_use]
 pub mod num;
 
+///
+#[stable(feature = "rust1", since = "1.0.0")]
+pub mod my_module {
+    ///
+    #[stable(feature = "rust1", since = "1.0.0")]
+    #[doc(hidden)]
+    #[macro_export]
+    macro_rules! my_macro {() => ()}
+
+    #[stable(feature = "rust1", since = "1.0.0")]
+    #[doc(inline)]
+    pub use my_macro;
+
+    #[stable(feature = "rust1", since = "1.0.0")]
+    #[doc(hidden)]
+    #[derive(Debug)]
+    pub struct Bar {}
+
+    ///
+    #[stable(feature = "rust1", since = "1.0.0")]
+    #[doc(inline)]
+    pub use Bar as Baz;
+}
+
 /* The libcore prelude, not as all-encompassing as the libstd prelude */
 
 pub mod prelude;

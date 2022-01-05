@@ -39,6 +39,7 @@ use std::{mem, vec};
 use crate::core::{self, DocContext, ImplTraitParam};
 use crate::formats::item_type::ItemType;
 use crate::visit_ast::Module as DocModule;
+use crate::visit_ast::StripOutermostDocHidden;
 
 use utils::*;
 
@@ -61,7 +62,9 @@ impl Clean<Item> for DocModule<'_> {
         items.extend(
             self.items
                 .iter()
-                .flat_map(|(item, renamed)| clean_maybe_renamed_item(cx, item, *renamed)),
+                .flat_map(|&(ref item, renamed, strip_outermost_doc_hidden)| {
+                    clean_maybe_renamed_item(cx, item, renamed, strip_outermost_doc_hidden)
+                })
         );
 
         // determine if we should display the inner contents or
@@ -1756,6 +1759,7 @@ fn clean_maybe_renamed_item(
     cx: &mut DocContext<'_>,
     item: &hir::Item<'_>,
     renamed: Option<Symbol>,
+    strip_outermost_doc_hidden: StripOutermostDocHidden,
 ) -> Vec<Item> {
     use hir::ItemKind;
 
@@ -1837,7 +1841,25 @@ fn clean_maybe_renamed_item(
             _ => unreachable!("not yet converted"),
         };
 
-        vec![Item::from_def_id_and_parts(def_id, Some(name), kind, cx)]
+        let stripped_ast_attrs;
+        let mut ast_attrs = cx.tcx.get_attrs(def_id);
+        match strip_outermost_doc_hidden {
+            StripOutermostDocHidden::YesBecausePleaseInline => {
+                if has_doc_flag(ast_attrs, sym::hidden) {
+                    stripped_ast_attrs = ast_attrs.iter().filter(|attr| !(
+                        // filter out the `doc(hidden)`s.
+                        attr.has_name(sym::doc) && attr.meta_item_list().map_or(
+                            false,
+                            |l| rustc_attr::list_contains_name(&l, sym::hidden),
+                        )
+                    )).cloned().collect::<Vec<_>>();
+                    debug_assert_ne!(stripped_ast_attrs.len(), ast_attrs.len());
+                    ast_attrs = &stripped_ast_attrs;
+                }
+            },
+            StripOutermostDocHidden::No => {},
+        }
+        vec![Item::from_def_id_and_ast_attrs_and_parts(def_id, Some(name), kind, ast_attrs, cx)]
     })
 }
 
