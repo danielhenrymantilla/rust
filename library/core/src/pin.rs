@@ -2014,5 +2014,5 @@ pub macro pin($value:expr $(,)?) {
     //
     // See https://doc.rust-lang.org/1.58.1/reference/destructors.html#temporary-lifetime-extension
     // for more info.
-    $crate::pin::Pin::<&mut _> { __pointer: &mut { $value } }
+    $crate::pin::Pin::<&mut _> { __pointer: &mut $crate::convert::identity($value) } }
 }
